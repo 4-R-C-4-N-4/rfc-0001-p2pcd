@@ -32,14 +32,12 @@ svg.state-diagram { display: block; margin: 24px auto; max-width: 100%; height: 
 
 <h3>P2P-CD-01</h3>
 <p>Peer-to-Peer Capability Discovery with Trust Gates</p>
-<p>Specification Draft — Version 0.3</p>
+<p>Specification Draft — Version 0.4</p>
 <p>Status: Work in Progress  |  Category: Proposed Standard</p>
 <br>
 <p>Abstract</p>
-<p>This document specifies a protocol for capability discovery between peers over connected sessions, with access control gates built into the protocol core. The protocol defines a CBOR-based wire format for capability advertisement (the discovery manifest), a hash-driven session state machine, role-aware capability negotiation with mutual active-set confirmation, and a peer cache mechanism for efficient re-connection handling. Trust credential schemes and transport bindings are defined in appendices.</p>
-<p>This protocol assumes that capability advertisement is public by default. Peers that require confidential capability sets SHOULD restrict discovery to authenticated transports.</p>
+<p>This document specifies a protocol for capability discovery between peers over connected sessions, with access control gates built into the protocol core. The protocol defines a CBOR-based wire format for capability advertisement through the discovery manifest, a hash-driven session state machine, role-aware capability negotiation with mutual active-set confirmation, and a peer cache mechanism for efficient re-connection handling. Trust credential schemes and transport bindings are defined in appendices.</p>
 <br>
-
 <h2>1.  Introduction</h2>
 <p>Capability discovery between peers is underspecified in existing P2P protocols. Protocols such as libp2p identify, XMPP service discovery, and WebRTC SDP each solve parts of the problem in incompatible ways, with access control treated as an application-layer concern. This produces interoperability failures and forces implementations to reinvent authorization logic.</p>
 <p>This specification defines a minimal, interoperable protocol for capability discovery that treats access control as a first-class protocol primitive. The core design goals are:</p>
@@ -110,11 +108,12 @@ discovery_manifest {
 <p>Each entry in the capabilities array is a capability declaration:</p>
 <pre><code>
 capability_declaration {
-    name             : &lt;namespace string (text string)&gt;
-    role             : PROVIDE | CONSUME | BOTH
-    mutual           : &lt;boolean, default false&gt;
-    classification   : &lt;group_ref (text string) | credential_blob (byte string)&gt;
-    scope            : scope_params
+    name               : &lt;namespace string (text string)&gt;
+    role               : PROVIDE | CONSUME | BOTH
+    mutual             : &lt;boolean, default false&gt;
+    classification     : &lt;group_ref (text string) | credential_blob (byte string)&gt;
+    scope              : scope_params
+    applicable_scope_keys : &lt;array of unsigned integers, optional&gt;
 }
 </code></pre>
 <br>
@@ -127,7 +126,8 @@ scope_params {
 <p>The role field MUST be present on every capability declaration.</p>
 <p>The mutual field MUST be set to true for capabilities that are intended to activate under a BOTH + BOTH role match (§7.4). If omitted, the default value is false.</p>
 <p>The classification field MAY be omitted. If omitted, the receiving peer MUST apply its local default classification policy. Classification is per-capability: a peer MAY present different credentials or group references for different capabilities within the same manifest. When the classification carries a cryptographic credential, it SHOULD be encoded as a COSE structure (§5.4) for consistency with the wire format.</p>
-<p>The scope_params fields are registry-extensible. The core protocol defines rate_limit and ttl. Additional scope parameters MAY be registered in the P2P-CAPDISC Scope Parameter Registry (§11). Each capability definition (e.g., Appendix B) SHOULD declare which scope parameters are applicable; scope parameters that are not applicable to a given capability MUST be ignored by the receiving peer.</p>
+<p>The applicable_scope_keys field is an optional array of scope parameter integer keys that are meaningful for this capability. If present, a receiver MUST enforce only the listed scope parameters and MUST ignore all others, even if values are present in scope-params. If absent, the receiver MUST fall back to the capability&#x27;s specification document.</p>
+<p>The scope_params fields are registry-extensible. The core protocol defines rate_limit and ttl. Additional scope parameters MAY be registered in the P2P-CAPDISC Scope Parameter Registry (§11). Capability definitions registered in the P2P-CAPDISC Well-Known Capabilities Registry MUST declare which scope parameters are applicable; scope parameters that are not applicable to a given capability MUST be ignored by the receiving peer.</p>
 
 <h2>4.3  Role Semantics</h2>
 <p>The role field declares a behavioral contract for the capability. The following roles are defined:</p>
@@ -147,9 +147,15 @@ capability   :=  [a-z] [a-z0-9]*
 version      :=  [0-9]+
 </code></pre>
 <p>The org segment is a reverse-domain-style organizational prefix that prevents namespace collisions across independent implementations.</p>
+<p>The scope segment SHOULD identify the functional layer or domain that the capability addresses. For capabilities in the reserved core.* namespace, the following scope segments are defined:</p>
+<p><strong>session</strong> — capabilities concerning the health and verification of the session itself (liveness, timing, attestation).</p>
+<p><strong>network</strong> — capabilities concerning network topology, addressing, and reachability (endpoint reflection, relay, peer exchange).</p>
+<p><strong>data</strong> — capabilities concerning data movement between peers (streams, blobs, RPC, events).</p>
+<p><strong>bridge</strong> — (reserved for future use) capabilities concerning interoperation with non-P2P protocols.</p>
+<p>Capability definitions registered under core.* MUST use one of the defined scope segments. Application-defined capabilities (non-core.*) MAY use any scope segment conforming to the grammar.</p>
 <p>The namespace prefix "core" is RESERVED for capabilities defined by this specification and its normative extensions. Implementations MUST NOT register capabilities under "core.*" without registration in the P2P-CAPDISC Well-Known Capabilities Registry (§11).</p>
-<p>Examples of conformant capability names: core.stream.relay.1, core.feed.paginated.1, core.heartbeat.liveness.1, com.example.media.transcode.2, org.freedesktop.desktop.share.1.</p>
-<p>Version is a required component of the name and represents a breaking change to the capability's semantics or wire format. Two capability names that differ only in version (e.g., core.feed.paginated.1 and core.feed.paginated.2) MUST be treated as distinct capabilities for the purposes of intersection computation. Non-breaking changes SHOULD be handled through scope parameters or capability-specific extension fields, not version increments.</p>
+<p>Examples of conformant capability names: core.session.heartbeat.1, core.data.stream.1, core.network.relay.1, com.example.media.transcode.2, org.freedesktop.desktop.share.1.</p>
+<p>Version is a required component of the name and represents a breaking change to the capability's semantics or wire format. Two capability names that differ only in version (e.g., core.data.blob.1 and core.data.blob.2) MUST be treated as distinct capabilities for the purposes of intersection computation. Non-breaking changes SHOULD be handled through scope parameters or capability-specific extension fields, not version increments.</p>
 
 <h2>4.5  Personal Hash Computation</h2>
 <p>The personal hash is computed over the deterministic CBOR serialization (§5.2) of the peer's manifest state:</p>
@@ -161,6 +167,23 @@ personal_hash = hash_algorithm;H(canonical_cbor(peer_id, sequence_num, sorted(ca
 <p>The hash input MUST be the deterministic CBOR encoding (§5.2) of the fields being hashed. This ensures that two conforming implementations with the same logical state always produce the same hash value.</p>
 <p>The hash_algorithm field MUST be prepended in the manifest.</p>
 <p>Note: This specification does not mandate a specific hash algorithm. Implementations SHOULD select from algorithms registered in the IANA Named Information Hash Algorithm Registry. The algorithm identifier in the manifest MUST use the IANA registered name. Implementations SHOULD support SHA-256 as a baseline for interoperability.</p>
+<br>
+
+
+<h2>4.6  Capability Definition Requirements</h2>
+<p>A capability definition registered in the P2P-CAPDISC Well-Known Capabilities Registry MUST include all of the following:</p>
+<p>1. <strong>Name</strong> — fully qualified namespace name conforming to §4.4.</p>
+<p>2. <strong>Role</strong> — which role values are valid for this capability (PROVIDE, CONSUME, BOTH, or a subset).</p>
+<p>3. <strong>Mutual</strong> — whether BOTH + BOTH activation requires mutual: true; if omitted, default is false.</p>
+<p>4. <strong>Capability-specific parameters</strong> — CDDL definitions for any parameters beyond rate_limit and ttl, carried in the capability&#x27;s scope-params extension keys.</p>
+<p>5. <strong>Scope applicability</strong> — which core scope parameters (rate_limit, ttl) are applicable, and which MUST be ignored.</p>
+<p>6. <strong>Message types</strong> — integer values for all messages the capability defines, with CDDL schemas conforming to the capability message envelope (§5.3.7).</p>
+<p>7. <strong>Parameter negotiation rules</strong> — for each capability-specific parameter, the reconciliation rule (most-restrictive-wins, provider-takes-precedence, or custom). Non-numeric parameters MUST define explicit reconciliation.</p>
+<p>8. <strong>Activation exchange</strong> — if the capability requires a message exchange upon entering the active set, the sequence MUST be defined here, including timeout behavior.</p>
+<p>9. <strong>Conformance level</strong> — whether the capability is Mandatory, Recommended, or Optional for each conformance level (§D).</p>
+<p>A capability definition SHOULD also include:</p>
+<p>10. <strong>Transport requirements</strong> — if the capability requires specific transport properties (e.g., ordered delivery, datagram support).</p>
+<p>11. <strong>Security considerations</strong> — capability-specific security implications.</p>
 <br>
 
 <h2>5.  Wire Format</h2>
@@ -206,6 +229,7 @@ capability-declaration = {
     ? 3 : bool,                  ; mutual (default: false)
     ? 4 : classification,        ; classification
     ? 5 : scope-params,          ; scope
+    ? 6 : [* uint],              ; applicable_scope_keys
 }
 
 role = &amp;(
@@ -231,6 +255,8 @@ offer-message = {
     2 : discovery-manifest,      ; the sender's full manifest
 }
 </code></pre>
+
+<p>The change_flags field is advisory and non-normative. Receiving peers MUST still perform full re-evaluation regardless of change_flags contents. Integer values are defined in the change-flag enumeration above.</p>
 
 <h3>5.3.4  CONFIRM Message</h3>
 <pre><code>
@@ -273,7 +299,29 @@ message-type = &amp;(
     close:   3,
 )
 </code></pre>
+<p>Message type values are allocated in the following ranges:</p>
+<table class="transition">
+<thead><tr><th>Range</th><th>Allocation</th><th>Authority</th></tr></thead>
+<tbody>
+<tr><td>1–3</td><td>Protocol messages (OFFER, CONFIRM, CLOSE)</td><td>This specification</td></tr>
+<tr><td>4–31</td><td>Reserved for <code>core.*</code> capabilities</td><td>P2P-CAPDISC Message Type Registry</td></tr>
+<tr><td>32–255</td><td>Application-defined</td><td>First-come, no registration required</td></tr>
+<tr><td>256+</td><td>Extended application-defined</td><td>First-come, no registration required</td></tr>
+</tbody>
+</table>
+<p>Capability definitions registered under core.* MUST allocate message types from the 4–31 range. Application-defined capabilities MUST NOT use message types in the 1–31 range. Two capabilities that allocate the same message type value MUST NOT both appear in the same active set; implementations MUST detect this conflict during intersection computation and exclude the later-registered capability.</p>
 <p>All messages are self-contained CBOR maps. When transmitted over a stream transport (TCP, QUIC stream, WebSocket), each message MUST be preceded by a 4-byte unsigned big-endian length prefix indicating the number of CBOR bytes that follow. Over datagram transports (UDP broadcast), each datagram contains exactly one message with no length prefix.</p>
+
+<h3>5.3.7  Capability Message Envelope</h3>
+<p>All messages defined by capability specifications — whether registered under core.* or application-defined — MUST conform to the following envelope structure:</p>
+<pre><code>
+capability-message = {
+    1 : uint,          ; message_type (from allocated range)
+    * uint =&gt; any,     ; capability-defined fields (keys &gt;= 2)
+}
+</code></pre>
+<p>Key 1 MUST contain the message type. Capability-specific fields MUST use integer keys &gt;= 2. A receiver that encounters a message with an unrecognized message type MUST ignore the message and MUST NOT close the session.</p>
+<p>The envelope ensures that any conforming decoder can extract the message type from any capability message without knowledge of the capability&#x27;s schema, enabling generic message dispatch.</p>
 
 <h2>5.4  Credential Encoding with COSE</h2>
 <p>When the classification field in a capability declaration carries a cryptographic credential (as opposed to a plain group_ref text string), the credential SHOULD be encoded using COSE (RFC 9052). This ensures that credential verification uses the same binary encoding as the rest of the protocol, avoiding format conversion between CBOR manifests and JSON-based credential formats.</p>
@@ -302,7 +350,7 @@ message-type = &amp;(
 
 <h2>6.2  Classification Authority</h2>
 <p>A peer&#x27;s classification is determined by the receiving peer using local policy. A connecting peer MAY assert a classification in its capability declaration via the classification field as a hint or credential. The receiving peer MAY accept, override, or ignore this assertion.</p>
-<p>Classification resolution MUST complete before capability activation. Because classification is per-capability, a single peer MAY be classified differently for different capabilities within the same session (e.g., UNRESTRICTED for core.heartbeat.liveness.1 but a restricted tier for core.stream.relay.1).</p>
+<p>Classification resolution MUST complete before capability activation. Because classification is per-capability, a single peer MAY be classified differently for different capabilities within the same session (e.g., UNRESTRICTED for core.session.heartbeat.1 but a restricted tier for core.data.stream.1).</p>
 
 <h2>6.3  Trust Gate Evaluation</h2>
 <p>For each capability in the received discovery manifest, the receiving peer MUST evaluate a trust gate using the resolved classification for that capability before the capability is considered for the active set.</p>
@@ -558,7 +606,15 @@ message-type = &amp;(
 <h2>7.6  Session Termination</h2>
 <p>A session outcome of NONE MUST result in session close. Implementations MUST send a CLOSE message (§5.3.5) with the appropriate reason_code, tear down the transport connection, and record the outcome in the peer cache.</p>
 <p>A closing peer SHOULD send a CLOSE message carrying its current personal hash and reason_code 0 (normal) before terminating the connection. Receipt of a CLOSE message MUST cause the receiving peer to deactivate all capabilities and tear down the transport connection.</p>
-<p>Ungraceful disconnection (no CLOSE message received) SHOULD be detected by the heartbeat mechanism (core.heartbeat.liveness.1, Appendix B). A heartbeat failure within the declared timeout constitutes a session failure and MUST trigger CAPABILITY_EXCHANGE re-entry. If re-exchange produces NONE, the session closes.</p>
+<p>Ungraceful disconnection (no CLOSE message received) SHOULD be detected by the heartbeat mechanism (core.session.heartbeat.1, Appendix B.1). A heartbeat failure within the declared timeout constitutes a session failure and MUST trigger CAPABILITY_EXCHANGE re-entry. If re-exchange produces NONE, the session closes.</p>
+<br>
+
+<h2>7.7  Capability Activation Sequence</h2>
+<p>When a session transitions to ACTIVE with a non-empty reconciled active set, capabilities in the active set MAY define an activation exchange — a bounded sequence of messages that MUST complete before the capability is considered fully operational.</p>
+<p>Activation exchanges, if defined, proceed in the order of the capability names sorted lexicographically (the same order used in the CONFIRM active set). Each capability&#x27;s activation exchange MUST complete (or time out) before the next capability&#x27;s activation exchange begins.</p>
+<p>A capability that defines no activation exchange is immediately operational upon entering the active set.</p>
+<p>A capability whose activation exchange fails or times out MUST be removed from the active set. If removal leaves the active set empty, the session MUST transition to NONE.</p>
+<p>Activation exchanges MUST be idempotent: if a re-exchange (§8) produces an active set containing a capability that was already active and whose activation exchange previously succeeded, the activation exchange MUST NOT be repeated.</p>
 <br>
 
 <h2>8.  Change Detection and Rebroadcast</h2>
@@ -577,7 +633,7 @@ message-type = &amp;(
 <p>A peer that receives a discovery manifest whose personal hash differs from the last stored hash for that peer MUST re-enter CAPABILITY_EXCHANGE state.</p>
 
 <h2>8.3  Advisory Change Flags</h2>
-<p>A rebroadcast MAY include an advisory change_flags field indicating the nature of the change. This field is non-normative; receiving peers MUST still perform full re-evaluation regardless of its contents. Defined flag values are: ADDED, REMOVED, SCOPE_ONLY, ROLE_CHANGE, CLASSIFICATION_CHANGE. Implementations MAY use change_flags to optimize re-evaluation (e.g., fast-pathing scope-only changes) but MUST NOT rely on them for correctness.</p>
+<p>A rebroadcast MAY include an advisory change_flags field in the OFFER message (§5.3.3). This field is non-normative; receiving peers MUST still perform full re-evaluation regardless of its contents. Integer values for change flags are defined in the change-flag enumeration in §5.3.3. Implementations MAY use change_flags to optimize re-evaluation (e.g., fast-pathing scope-only changes) but MUST NOT rely on them for correctness.</p>
 
 <h2>8.4  Active Set Continuity During Re-exchange</h2>
 <p>When a session transitions from ACTIVE to CAPABILITY_EXCHANGE due to a hash change, the existing active set MUST remain operational until the new exchange completes. Capabilities in the current active set continue to function during re-negotiation. Once the new exchange produces a reconciled active set (§7.2), the new set replaces the prior set atomically. Capabilities present in the prior set but absent from the new set MUST be deactivated. Capabilities present in both sets MUST NOT be interrupted.</p>
@@ -637,12 +693,19 @@ peer_cache_entry {
 <p>COSE-signed credentials (§5.4) MUST be verified before the claims within them are used for classification. Implementations MUST NOT trust the contents of a COSE structure whose signature or MAC verification has failed.</p>
 <br>
 
+<h2>10.8  Limits of Protocol-Level Trust</h2>
+<p>This protocol provides mechanisms for peers to exchange identity, capability, and build information. It does not and cannot guarantee that a remote peer is behaving honestly.</p>
+<p>A peer that controls its own runtime environment can misrepresent any self-reported value, including the personal hash, capability declarations, scope parameters, build attestation data, and classification credentials. No software-only protocol can verify the runtime behavior of a remote process without a hardware trust root.</p>
+<p>The trust gates, classification system, and build attestation capability defined in this specification raise the cost of undetected misbehavior. They do not eliminate it. Implementations SHOULD NOT treat protocol-level trust mechanisms as sufficient for high-stakes authorization decisions without additional out-of-band verification.</p>
+<p>Peer operators are responsible for evaluating the trustworthiness of the peers they connect to through means appropriate to their deployment context.</p>
+<br>
+
 <h2>11.  IANA Considerations</h2>
 <p>This document requests the following IANA registries:</p>
 <p>P2P-CAPDISC Well-Known Capabilities Registry — maps capability name strings under the reserved "core.*" namespace to specification documents. Registration requires Standards Action.</p>
 <p>P2P-CAPDISC Hash Algorithm Registry — maps algorithm identifier strings to hash algorithm specifications. Entries SHOULD reference algorithms registered in the IANA Named Information Hash Algorithm Registry.</p>
-<p>P2P-CAPDISC Scope Parameter Registry — maps scope parameter integer keys to field names, type definitions, units, and applicability constraints. Keys 1 (rate_limit) and 2 (ttl) are registered by this document.</p>
-<p>P2P-CAPDISC Message Type Registry — maps message type integer values to message names and specification sections. Values 1 (OFFER), 2 (CONFIRM), and 3 (CLOSE) are registered by this document.</p>
+<p>P2P-CAPDISC Scope Parameter Registry — maps scope parameter integer keys to field names, type definitions, units, and applicability constraints. Keys 1 (rate_limit) and 2 (ttl) are registered by this document. Scope parameter keys 1–15 are reserved for parameters defined by this specification and its normative extensions. Keys 16–127 are available for capability-specific parameters registered in the P2P-CAPDISC Scope Parameter Registry. Keys 128+ are available for application-defined parameters without registration.</p>
+<p>P2P-CAPDISC Message Type Registry — maps message type integer values to message names and specification sections. Values 1 (OFFER), 2 (CONFIRM), and 3 (CLOSE) are registered by this document. See §5.3.6 for the message type allocation policy.</p>
 <p>P2P-CAPDISC Close Reason Code Registry — maps reason code integer values to reason names. Values 0–4 and 255 are registered by this document.</p>
 <br>
 
@@ -680,47 +743,360 @@ peer_cache_entry {
 <p>Macaroons may be used as credential_blobs where capability-scoped, delegatable authorization is required. The caveats in the macaroon encode the scope constraints directly, allowing the receiving peer to verify that the presented token authorizes specifically the capabilities being requested.</p>
 <br>
 
-<h2>Appendix B.  Reference Capability Definitions</h2>
-<p>This appendix defines reference capability implementations using the namespace grammar defined in §4.4. These definitions are normative for implementations that claim to support the named capabilities.</p>
-<p>B.1  core.heartbeat.liveness.1</p>
-<pre><code>
-name:     core.heartbeat.liveness.1
-role:     BOTH
-mutual:   true
-purpose:  Session liveness detection
-params:   { interval_ms: uint, timeout_ms: uint }
-scope:    ttl applies; rate_limit does not apply
-</code></pre>
-<p>Both peers MUST declare role BOTH with mutual: true for this capability to activate. One peer sends a PING message at interval_ms; the other MUST respond with PONG within timeout_ms. Failure to receive PONG within timeout_ms constitutes session failure and MUST trigger CAPABILITY_EXCHANGE re-entry.</p>
-<p>PING and PONG are CBOR maps with message_type values 4 and 5 respectively:</p>
+<h2>Appendix B.  Core Capability Catalog</h2>
+<p>This appendix defines the core capability implementations using the namespace grammar defined in §4.4, the capability definition requirements of §4.6, and the capability message envelope of §5.3.7. These definitions are normative for implementations that claim to support the named capabilities.</p>
+<p>The catalog is organized into three tiers based on the network layer the capability addresses: session (§B.1–B.4), network (§B.5–B.7), and data (§B.8–B.11).</p>
+
+<h3>B.1  core.session.heartbeat.1</h3>
+<table class="transition">
+<tbody>
+<tr><td><strong>Name</strong></td><td><code>core.session.heartbeat.1</code></td></tr>
+<tr><td><strong>Role</strong></td><td>BOTH (mutual: true)</td></tr>
+<tr><td><strong>Purpose</strong></td><td>Session liveness detection</td></tr>
+<tr><td><strong>Params</strong></td><td><code>interval_ms: uint</code>, <code>timeout_ms: uint</code></td></tr>
+<tr><td><strong>Scope</strong></td><td><code>ttl</code> applies; <code>rate_limit</code> does not apply</td></tr>
+<tr><td><strong>Message types</strong></td><td>PING (4), PONG (5)</td></tr>
+<tr><td><strong>Conformance</strong></td><td><strong>Mandatory</strong> (§D.1)</td></tr>
+</tbody>
+</table>
 <pre><code>
 ping-message = { 1 : 4, 2 : uint }   ; message_type=4, timestamp
 pong-message = { 1 : 5, 2 : uint }   ; message_type=5, echo timestamp
 </code></pre>
-<p>B.2  core.stream.relay.1</p>
+<p>Both peers MUST declare role BOTH with mutual: true for this capability to activate. Both peers send PING at interval_ms. Failure to receive PONG within timeout_ms constitutes session failure and MUST trigger CAPABILITY_EXCHANGE re-entry. This is the foundation that every other capability relies on — without liveness, no other guarantee can be reasoned about.</p>
+<p>Negotiation: interval_ms uses most-restrictive-wins (higher value = less frequent). timeout_ms uses most-restrictive-wins (lower value = stricter).</p>
+
+<h3>B.2  core.session.attest.1</h3>
+<table class="transition">
+<tbody>
+<tr><td><strong>Name</strong></td><td><code>core.session.attest.1</code></td></tr>
+<tr><td><strong>Role</strong></td><td>BOTH (mutual: true)</td></tr>
+<tr><td><strong>Purpose</strong></td><td>Mutual exchange of build identity at session activation</td></tr>
+<tr><td><strong>Params</strong></td><td>See <code>attest-params</code> below</td></tr>
+<tr><td><strong>Scope</strong></td><td><code>ttl</code> applies; <code>rate_limit</code> does not apply</td></tr>
+<tr><td><strong>Message types</strong></td><td>BUILD_ATTEST (6)</td></tr>
+<tr><td><strong>Activation exchange</strong></td><td>Yes — single message each direction upon entering active set</td></tr>
+<tr><td><strong>Conformance</strong></td><td><strong>Recommended</strong></td></tr>
+</tbody>
+</table>
 <pre><code>
-name:     core.stream.relay.1
-role:     PROVIDE | CONSUME
-purpose:  Unidirectional continuous data stream
-requires: transport.udp or transport.quic
-params:   { bitrate_kbps: uint, codec: tstr }
-scope:    ttl applies; rate_limit does not apply (continuous stream)
-param_negotiation:
-    bitrate_kbps: min(provider, consumer)
-    codec: provider's value takes precedence
+build-attest = { 1 : 6,
+    2 : attest-params
+}
+
+attest-params = {
+    1 : uint,          ; spec_version — protocol spec version this build targets
+    2 : tstr,          ; lib_name — implementation identifier (e.g. "p2pcd-core")
+    3 : tstr,          ; lib_version — semantic version of the library
+    4 : tstr,          ; source_repo — canonical source URL
+    5 : bstr,          ; source_hash — commit hash the build was produced from
+    6 : bstr,          ; binary_hash — hash of the running binary image
+    7 : tstr,          ; hash_algorithm — IANA name for binary_hash (e.g. "sha-256")
+    ? 8 : tstr,        ; build_target — compiler target triple
+    ? 9 : tstr,        ; build_profile — "release" | "debug" | custom
+    ? 10 : bstr,       ; signature — detached signature over canonical CBOR of fields 1–9
+    ? 11 : bstr,       ; signer_id — public key of the signer
+    ? 12 : [* patch-decl]  ; declared modifications to source
+}
+
+patch-decl = {
+    1 : tstr,          ; patch_name — human-readable label
+    2 : bstr           ; patch_hash — hash of the patch content
+}
 </code></pre>
-<p>B.3  core.feed.paginated.1</p>
+<p>When core.session.attest.1 enters the active set after CONFIRM reconciliation, both peers immediately send a single build-attest message (§7.7). There is no challenge, no ongoing re-verification, no response expected.</p>
+<p>Each peer evaluates the received attestation against local policy and updates the peer&#x27;s classification accordingly. The evaluation is entirely local — the protocol does not define pass/fail semantics.</p>
+<p><strong>What this verifies:</strong> Spec compatibility (spec_version). Implementation identity (lib_name, lib_version). Source provenance (source_repo, source_hash). Binary integrity (binary_hash against published reproducible builds). Build authority (signature, signer_id). Declared modifications (patch-decl).</p>
+<p><strong>What this does NOT verify:</strong> Runtime honesty — a peer that controls its own process can forge any self-reported value. Behavioral conformance — a correct binary on a compromised OS may behave non-conformantly. Shared library integrity — only the main executable is hashed.</p>
+<table class="transition">
+<thead><tr><th>Threat</th><th>Detected?</th><th>Mechanism</th></tr></thead>
+<tbody>
+<tr><td>Trojanized binary from compromised mirror</td><td><strong>Yes</strong></td><td>binary_hash mismatch against published release</td></tr>
+<tr><td>Accidental dirty build on production mesh</td><td><strong>Yes</strong></td><td>source_hash doesn&#x27;t match a release commit</td></tr>
+<tr><td>Unknown fork joining the mesh</td><td><strong>Yes</strong></td><td>source_repo points to unrecognized repository</td></tr>
+<tr><td>Patched build with undeclared modifications</td><td><strong>Partial</strong></td><td>binary_hash mismatch, but no patch-decl</td></tr>
+<tr><td>Determined adversary forging all fields</td><td><strong>No</strong></td><td>Self-reported values; no hardware trust root</td></tr>
+<tr><td>Runtime code injection (LD_PRELOAD, ptrace)</td><td><strong>No</strong></td><td>Binary on disk is correct; runtime is not</td></tr>
+<tr><td>Compromised shared libraries</td><td><strong>No</strong></td><td>Only main executable is hashed</td></tr>
+</tbody>
+</table>
+
+<h3>B.3  core.session.timesync.1</h3>
+<table class="transition">
+<tbody>
+<tr><td><strong>Name</strong></td><td><code>core.session.timesync.1</code></td></tr>
+<tr><td><strong>Role</strong></td><td>BOTH (mutual: true)</td></tr>
+<tr><td><strong>Purpose</strong></td><td>Clock offset estimation between peers</td></tr>
+<tr><td><strong>Params</strong></td><td><code>precision_ms: uint</code> — desired precision floor</td></tr>
+<tr><td><strong>Scope</strong></td><td><code>rate_limit</code> applies (sync probes/sec); <code>ttl</code> applies</td></tr>
+<tr><td><strong>Message types</strong></td><td>TIME_REQ (7), TIME_RESP (8)</td></tr>
+<tr><td><strong>Conformance</strong></td><td>Recommended</td></tr>
+</tbody>
+</table>
 <pre><code>
-name:     core.feed.paginated.1
-role:     PROVIDE | CONSUME
-purpose:  Paginated event or content feed
-requires: transport.tcp or transport.quic
-params:   { page_size: uint, encoding: tstr }
-scope:    rate_limit applies (requests per second); ttl applies
-param_negotiation:
-    page_size: min(provider, consumer)
-    encoding: provider's value takes precedence
+time-req  = { 1 : 7,  2 : uint }   ; message_type=7, t1 (sender timestamp ms)
+time-resp = { 1 : 8,  2 : uint,    ; message_type=8, t1 (echo)
+                       3 : uint,    ; t2 (receiver timestamp at receipt)
+                       4 : uint }   ; t3 (receiver timestamp at send)
 </code></pre>
+<p>NTP-style four-timestamp exchange. The initiator records t4 on receipt. Offset = ((t2 - t1) + (t3 - t4)) / 2. RTT = (t4 - t1) - (t3 - t2). Coordinated timestamps are required for event ordering, TTL enforcement across peers, certificate validation, log correlation, and replay detection.</p>
+<p>Negotiation: precision_ms uses most-restrictive-wins (higher value = less precise = less traffic).</p>
+
+<h3>B.4  core.session.latency.1</h3>
+<table class="transition">
+<tbody>
+<tr><td><strong>Name</strong></td><td><code>core.session.latency.1</code></td></tr>
+<tr><td><strong>Role</strong></td><td>BOTH (mutual: true)</td></tr>
+<tr><td><strong>Purpose</strong></td><td>One-way and round-trip latency measurement</td></tr>
+<tr><td><strong>Params</strong></td><td><code>sample_interval_ms: uint</code>, <code>window_size: uint</code></td></tr>
+<tr><td><strong>Scope</strong></td><td><code>rate_limit</code> applies; <code>ttl</code> applies</td></tr>
+<tr><td><strong>Message types</strong></td><td>LAT_PING (9), LAT_PONG (10)</td></tr>
+<tr><td><strong>Conformance</strong></td><td>Optional</td></tr>
+</tbody>
+</table>
+<pre><code>
+lat-ping = { 1 : 9,  2 : uint,   ; message_type=9, sequence
+                      3 : uint }  ; t_send (sender timestamp µs)
+lat-pong = { 1 : 10, 2 : uint,   ; message_type=10, sequence (echo)
+                      3 : uint,   ; t_send (echo)
+                      4 : uint }  ; t_recv (responder timestamp µs)
+</code></pre>
+<p>Distinct from heartbeat. Heartbeat answers "are you alive?" with a binary yes/no. Latency ping answers "how far away are you?" with a measurement. The window_size param controls how many samples to retain for rolling statistics (mean, p50, p99). Latency-aware peer selection is fundamental to relay routing, stream quality adaptation, and any application that needs to choose the best peer from a set.</p>
+<p>Negotiation: sample_interval_ms uses most-restrictive-wins (higher = less frequent). window_size uses most-restrictive-wins (lower = less memory).</p>
+
+<h3>B.5  core.network.endpoint.1</h3>
+<table class="transition">
+<tbody>
+<tr><td><strong>Name</strong></td><td><code>core.network.endpoint.1</code></td></tr>
+<tr><td><strong>Role</strong></td><td>PROVIDE | CONSUME</td></tr>
+<tr><td><strong>Purpose</strong></td><td>Peer reports the requesting peer&#x27;s externally observed network address</td></tr>
+<tr><td><strong>Params</strong></td><td><code>include_geo: bool</code> — whether to include approximate geolocation</td></tr>
+<tr><td><strong>Scope</strong></td><td><code>rate_limit</code> applies; <code>ttl</code> applies</td></tr>
+<tr><td><strong>Message types</strong></td><td>WHOAMI_REQ (11), WHOAMI_RESP (12)</td></tr>
+<tr><td><strong>Conformance</strong></td><td>Recommended</td></tr>
+</tbody>
+</table>
+<pre><code>
+whoami-req  = { 1 : 11 }
+whoami-resp = { 1 : 12,
+    2 : tstr,          ; observed_addr (e.g. "203.0.113.42:41312")
+    3 : uint,          ; addr_family (4 = IPv4, 6 = IPv6)
+    ? 4 : tstr,        ; observed_hostname (reverse DNS, if available)
+    ? 5 : [float, float]  ; approx_geo [lat, lon] (if include_geo)
+}
+</code></pre>
+<p>The P2P-CD equivalent of STUN. The PROVIDE peer looks at the transport-level source address of the authenticated session and reports it back. The CONSUME peer learns its public-facing address from the perspective of this specific peer. NAT traversal, multi-homing, and peer advertisement all require a node to know its own externally visible address.</p>
+<p>Negotiation: include_geo is provider-takes-precedence (the reflector decides whether to provide geolocation).</p>
+
+<h3>B.6  core.network.relay.1</h3>
+<table class="transition">
+<tbody>
+<tr><td><strong>Name</strong></td><td><code>core.network.relay.1</code></td></tr>
+<tr><td><strong>Role</strong></td><td>PROVIDE | CONSUME</td></tr>
+<tr><td><strong>Purpose</strong></td><td>Third-party relay — forwarding framed messages between two peers that cannot directly connect</td></tr>
+<tr><td><strong>Params</strong></td><td><code>max_circuits: uint</code>, <code>max_bandwidth_kbps: uint</code>, <code>relay_ttl: uint</code></td></tr>
+<tr><td><strong>Scope</strong></td><td><code>rate_limit</code> applies (circuit creation rate); <code>ttl</code> applies (circuit lifetime)</td></tr>
+<tr><td><strong>Message types</strong></td><td>CIRCUIT_OPEN (13), CIRCUIT_DATA (14), CIRCUIT_CLOSE (15)</td></tr>
+<tr><td><strong>Conformance</strong></td><td>Recommended</td></tr>
+</tbody>
+</table>
+<pre><code>
+circuit-open = { 1 : 13,
+    2 : bstr,          ; target_peer_id
+    3 : uint,          ; requested_bandwidth_kbps
+    ? 4 : uint         ; requested_ttl (seconds)
+}
+circuit-data = { 1 : 14,
+    2 : uint,          ; circuit_id (assigned by relay)
+    3 : bstr           ; payload (opaque, end-to-end encrypted by peers)
+}
+circuit-close = { 1 : 15,
+    2 : uint,          ; circuit_id
+    ? 3 : uint         ; reason (0=normal, 1=target_unreachable,
+                       ;         2=bandwidth_exceeded, 3=ttl_expired)
+}
+</code></pre>
+<p>A PROVIDE peer acts as a public relay. A CONSUME peer requests a circuit to a target peer that it cannot reach directly. The relay forwards opaque frames; it never inspects payload content.</p>
+<p>The relay MUST NOT have access to plaintext content. All circuit-data payloads are end-to-end encrypted between the two endpoint peers using their own session keys. The relay only sees ciphertext. This is a MUST-level requirement.</p>
+<p>Negotiation: max_bandwidth_kbps uses most-restrictive-wins. max_circuits is provider-takes-precedence (the relay decides its own capacity). relay_ttl uses most-restrictive-wins.</p>
+
+<h3>B.7  core.network.peerexchange.1</h3>
+<table class="transition">
+<tbody>
+<tr><td><strong>Name</strong></td><td><code>core.network.peerexchange.1</code></td></tr>
+<tr><td><strong>Role</strong></td><td>BOTH (mutual: true)</td></tr>
+<tr><td><strong>Purpose</strong></td><td>Gossip-style exchange of known peer addresses and capability hashes</td></tr>
+<tr><td><strong>Params</strong></td><td><code>max_peers: uint</code>, <code>include_capabilities: bool</code></td></tr>
+<tr><td><strong>Scope</strong></td><td><code>rate_limit</code> applies (exchanges/sec); <code>ttl</code> applies</td></tr>
+<tr><td><strong>Message types</strong></td><td>PEX_REQ (16), PEX_RESP (17)</td></tr>
+<tr><td><strong>Conformance</strong></td><td>Recommended</td></tr>
+</tbody>
+</table>
+<pre><code>
+pex-req = { 1 : 16,
+    ? 2 : tstr,        ; filter_capability (only return peers offering this)
+    ? 3 : uint         ; max_results
+}
+pex-resp = { 1 : 17,
+    2 : [* peer-info]
+}
+peer-info = {
+    1 : bstr,          ; peer_id
+    2 : bstr,          ; personal_hash
+    3 : tstr,          ; reachable_addr
+    4 : uint,          ; last_seen (seconds since epoch)
+    ? 5 : [* tstr]     ; capability_names (if include_capabilities)
+}
+</code></pre>
+<p>Peer Exchange is how sparse networks bootstrap into connected meshes without relying on a central rendezvous server. Peers share their knowledge of other reachable peers, optionally filtered by capability. The personal_hash is included so the receiver can apply auto-deny checks before attempting connection.</p>
+<p>Security: A peer MUST NOT include peers in a PEX response that have not consented to peer exchange (i.e., that are not themselves advertising core.network.peerexchange.1).</p>
+<p>Negotiation: max_peers uses most-restrictive-wins. include_capabilities is provider-takes-precedence.</p>
+
+<h3>B.8  core.data.stream.1</h3>
+<table class="transition">
+<tbody>
+<tr><td><strong>Name</strong></td><td><code>core.data.stream.1</code></td></tr>
+<tr><td><strong>Role</strong></td><td>PROVIDE | CONSUME</td></tr>
+<tr><td><strong>Purpose</strong></td><td>Unidirectional continuous data stream</td></tr>
+<tr><td><strong>Params</strong></td><td><code>bitrate_kbps: uint</code>, <code>codec: tstr</code></td></tr>
+<tr><td><strong>Scope</strong></td><td><code>ttl</code> applies; <code>rate_limit</code> does not apply (continuous stream)</td></tr>
+<tr><td><strong>Transport</strong></td><td>Requires transport.udp or transport.quic</td></tr>
+<tr><td><strong>Conformance</strong></td><td>Optional</td></tr>
+</tbody>
+</table>
+<p>Negotiation: bitrate_kbps uses most-restrictive-wins (min of provider and consumer). codec uses provider-takes-precedence per §7.3 fallback for non-numeric parameters.</p>
+
+<h3>B.9  core.data.blob.1</h3>
+<table class="transition">
+<tbody>
+<tr><td><strong>Name</strong></td><td><code>core.data.blob.1</code></td></tr>
+<tr><td><strong>Role</strong></td><td>PROVIDE | CONSUME</td></tr>
+<tr><td><strong>Purpose</strong></td><td>Reliable transfer of a finite, integrity-verified blob</td></tr>
+<tr><td><strong>Params</strong></td><td><code>max_blob_bytes: uint</code>, <code>chunk_size: uint</code>, <code>hash_algorithm: tstr</code></td></tr>
+<tr><td><strong>Scope</strong></td><td><code>rate_limit</code> applies (bytes/sec); <code>ttl</code> applies</td></tr>
+<tr><td><strong>Message types</strong></td><td>BLOB_REQ (18), BLOB_OFFER (19), BLOB_CHUNK (20), BLOB_ACK (21)</td></tr>
+<tr><td><strong>Conformance</strong></td><td>Recommended</td></tr>
+</tbody>
+</table>
+<pre><code>
+blob-req = { 1 : 18,
+    2 : bstr,          ; content_hash (identifies the blob)
+    3 : tstr,          ; hash_algorithm
+    ? 4 : uint         ; offset (resume from byte N)
+}
+blob-offer = { 1 : 19,
+    2 : bstr,          ; content_hash (echo)
+    3 : uint,          ; total_size (bytes)
+    4 : uint,          ; chunk_size (bytes)
+    ? 5 : uint         ; status (0=available, 1=not_found, 2=too_large)
+}
+blob-chunk = { 1 : 20,
+    2 : bstr,          ; content_hash
+    3 : uint,          ; offset
+    4 : bstr           ; data
+}
+blob-ack = { 1 : 21,
+    2 : bstr,          ; content_hash
+    3 : uint,          ; bytes_received
+    ? 4 : uint         ; status (0=continue, 1=complete, 2=hash_mismatch, 3=abort)
+}
+</code></pre>
+<p>Content-addressed blob transfer with chunking, resume, and integrity verification. The blob is identified by its hash, not by a filename or path. The consumer requests a blob by hash; the provider streams chunks; the consumer verifies the hash over the complete reassembled blob.</p>
+<p>The offset field in blob-req enables resume after transport interruption. The provider starts sending from that offset.</p>
+<p>Negotiation: max_blob_bytes is provider-takes-precedence (the provider knows its storage). chunk_size uses most-restrictive-wins. hash_algorithm: if peers disagree, the provider&#x27;s value takes precedence per §7.3.</p>
+
+<h3>B.10  core.data.rpc.1</h3>
+<table class="transition">
+<tbody>
+<tr><td><strong>Name</strong></td><td><code>core.data.rpc.1</code></td></tr>
+<tr><td><strong>Role</strong></td><td>PROVIDE | CONSUME</td></tr>
+<tr><td><strong>Purpose</strong></td><td>Generic request/response RPC over the P2P-CD session</td></tr>
+<tr><td><strong>Params</strong></td><td><code>max_request_bytes: uint</code>, <code>max_response_bytes: uint</code>, <code>methods: [tstr]</code></td></tr>
+<tr><td><strong>Scope</strong></td><td><code>rate_limit</code> applies; <code>ttl</code> applies</td></tr>
+<tr><td><strong>Message types</strong></td><td>RPC_REQ (22), RPC_RESP (23)</td></tr>
+<tr><td><strong>Conformance</strong></td><td>Optional</td></tr>
+</tbody>
+</table>
+<pre><code>
+rpc-req = { 1 : 22,
+    2 : uint,          ; request_id
+    3 : tstr,          ; method
+    4 : bstr           ; payload (CBOR-encoded, method-specific)
+}
+rpc-resp = { 1 : 23,
+    2 : uint,          ; request_id (echo)
+    3 : uint,          ; status (0=ok, 1=not_found, 2=error, 3=timeout)
+    ? 4 : bstr         ; payload (CBOR-encoded, method-specific)
+    ? 5 : tstr         ; error_message
+}
+</code></pre>
+<p>Generic request/response semantics over an established P2P-CD session. The methods param in the capability declaration advertises which RPC methods the provider supports. Method semantics are defined by the application; the core capability only standardizes the envelope.</p>
+<p>Negotiation: max_request_bytes and max_response_bytes use most-restrictive-wins. methods: the activated method set is the intersection of both peers&#x27; declared methods.</p>
+
+<h3>B.11  core.data.event.1</h3>
+<table class="transition">
+<tbody>
+<tr><td><strong>Name</strong></td><td><code>core.data.event.1</code></td></tr>
+<tr><td><strong>Role</strong></td><td>PROVIDE | CONSUME | BOTH</td></tr>
+<tr><td><strong>Purpose</strong></td><td>Pub/sub event notification with topic filtering</td></tr>
+<tr><td><strong>Params</strong></td><td><code>topics: [tstr]</code>, <code>max_payload_bytes: uint</code></td></tr>
+<tr><td><strong>Scope</strong></td><td><code>rate_limit</code> applies (events/sec); <code>ttl</code> applies</td></tr>
+<tr><td><strong>Message types</strong></td><td>EVENT_SUB (24), EVENT_UNSUB (25), EVENT_MSG (26)</td></tr>
+<tr><td><strong>Conformance</strong></td><td>Optional</td></tr>
+</tbody>
+</table>
+<pre><code>
+event-sub = { 1 : 24,
+    2 : [* tstr]       ; topic_filters (prefix match)
+}
+event-unsub = { 1 : 25,
+    2 : [* tstr]       ; topic_filters
+}
+event-msg = { 1 : 26,
+    2 : tstr,          ; topic
+    3 : bstr,          ; payload (opaque, application-defined)
+    4 : uint,          ; timestamp_ms
+    ? 5 : bstr         ; source_peer_id (originator, if relayed)
+}
+</code></pre>
+<p>Topic-based pub/sub over an active session. A PROVIDE peer accepts subscriptions and pushes matching events. A CONSUME peer subscribes to topics and receives events. BOTH with mutual: true enables bidirectional event exchange.</p>
+<p>Topic filtering: topic_filters use prefix matching. Subscribing to ["chat."] receives chat.general, chat.random, etc. Subscribing to [""] (empty string prefix) receives everything. The topics param in the capability declaration advertises available topic prefixes so consumers can evaluate compatibility at OFFER time.</p>
+<p>Negotiation: max_payload_bytes uses most-restrictive-wins. topics: the activated topic set is the intersection of provider&#x27;s advertised topics and consumer&#x27;s requested filters.</p>
+
+<h3>B.12  Message Type Allocation Summary</h3>
+<table class="transition">
+<thead><tr><th>Type</th><th>Message</th><th>Capability</th><th>Status</th></tr></thead>
+<tbody>
+<tr><td>1</td><td>OFFER</td><td>(protocol)</td><td>Normative §5.3.3</td></tr>
+<tr><td>2</td><td>CONFIRM</td><td>(protocol)</td><td>Normative §5.3.4</td></tr>
+<tr><td>3</td><td>CLOSE</td><td>(protocol)</td><td>Normative §5.3.5</td></tr>
+<tr><td>4</td><td>PING</td><td><code>core.session.heartbeat.1</code></td><td>Normative B.1</td></tr>
+<tr><td>5</td><td>PONG</td><td><code>core.session.heartbeat.1</code></td><td>Normative B.1</td></tr>
+<tr><td>6</td><td>BUILD_ATTEST</td><td><code>core.session.attest.1</code></td><td>Normative B.2</td></tr>
+<tr><td>7</td><td>TIME_REQ</td><td><code>core.session.timesync.1</code></td><td>Normative B.3</td></tr>
+<tr><td>8</td><td>TIME_RESP</td><td><code>core.session.timesync.1</code></td><td>Normative B.3</td></tr>
+<tr><td>9</td><td>LAT_PING</td><td><code>core.session.latency.1</code></td><td>Normative B.4</td></tr>
+<tr><td>10</td><td>LAT_PONG</td><td><code>core.session.latency.1</code></td><td>Normative B.4</td></tr>
+<tr><td>11</td><td>WHOAMI_REQ</td><td><code>core.network.endpoint.1</code></td><td>Normative B.5</td></tr>
+<tr><td>12</td><td>WHOAMI_RESP</td><td><code>core.network.endpoint.1</code></td><td>Normative B.5</td></tr>
+<tr><td>13</td><td>CIRCUIT_OPEN</td><td><code>core.network.relay.1</code></td><td>Normative B.6</td></tr>
+<tr><td>14</td><td>CIRCUIT_DATA</td><td><code>core.network.relay.1</code></td><td>Normative B.6</td></tr>
+<tr><td>15</td><td>CIRCUIT_CLOSE</td><td><code>core.network.relay.1</code></td><td>Normative B.6</td></tr>
+<tr><td>16</td><td>PEX_REQ</td><td><code>core.network.peerexchange.1</code></td><td>Normative B.7</td></tr>
+<tr><td>17</td><td>PEX_RESP</td><td><code>core.network.peerexchange.1</code></td><td>Normative B.7</td></tr>
+<tr><td>18</td><td>BLOB_REQ</td><td><code>core.data.blob.1</code></td><td>Normative B.9</td></tr>
+<tr><td>19</td><td>BLOB_OFFER</td><td><code>core.data.blob.1</code></td><td>Normative B.9</td></tr>
+<tr><td>20</td><td>BLOB_CHUNK</td><td><code>core.data.blob.1</code></td><td>Normative B.9</td></tr>
+<tr><td>21</td><td>BLOB_ACK</td><td><code>core.data.blob.1</code></td><td>Normative B.9</td></tr>
+<tr><td>22</td><td>RPC_REQ</td><td><code>core.data.rpc.1</code></td><td>Normative B.10</td></tr>
+<tr><td>23</td><td>RPC_RESP</td><td><code>core.data.rpc.1</code></td><td>Normative B.10</td></tr>
+<tr><td>24</td><td>EVENT_SUB</td><td><code>core.data.event.1</code></td><td>Normative B.11</td></tr>
+<tr><td>25</td><td>EVENT_UNSUB</td><td><code>core.data.event.1</code></td><td>Normative B.11</td></tr>
+<tr><td>26</td><td>EVENT_MSG</td><td><code>core.data.event.1</code></td><td>Normative B.11</td></tr>
+<tr><td>27–31</td><td>(reserved)</td><td>—</td><td>Reserved for v2 core extensions</td></tr>
+<tr><td>32+</td><td>(application)</td><td>(application-defined)</td><td>Open</td></tr>
+</tbody>
+</table>
 <br>
 
 <h2>Appendix C.  Transport Bindings</h2>
@@ -750,7 +1126,7 @@ param_negotiation:
     <li>The built-in UNRESTRICTED and DENIED classification tiers (§6.1)</li>
     <li>Sequence number replay detection per §4.1</li>
     <li>Glare resolution per §7.1.3</li>
-    <li>core.heartbeat.liveness.1 per Appendix B.1</li>
+    <li>core.session.heartbeat.1 per Appendix B.1</li>
 </ul>
 <p>D.2  Full Conforming Implementation</p>
 <ul>
@@ -761,6 +1137,7 @@ param_negotiation:
     <li>Parameter negotiation via CONFIRM accepted_params per §7.3</li>
     <li>Active set continuity during re-exchange per §8.4</li>
     <li>COSE credential verification per §5.4</li>
+    <li>Build attestation exchange per core.session.attest.1 (Appendix B.2)</li>
 </ul>
 <br>
 
@@ -771,10 +1148,10 @@ param_negotiation:
 <p>Neither peer offers capabilities the other can consume.</p>
 <pre><code>
 A -> B : OFFER { 1:1, 2:{1:1, 2:h'A1...', 3:42,
-         4:[{1:"core.stream.relay.1", 2:1}],
+         4:[{1:"core.data.stream.1", 2:1}],
          5:h'FF01...', 6:"sha-256"} }
 B -> A : OFFER { 1:1, 2:{1:1, 2:h'B2...', 3:17,
-         4:[{1:"core.stream.relay.1", 2:1}],
+         4:[{1:"core.data.stream.1", 2:1}],
          5:h'FF02...', 6:"sha-256"} }
 
 A computes intersection: PROVIDE + PROVIDE = no match
@@ -792,19 +1169,19 @@ Both peers store: { peer_id, last_hash, last_outcome: NONE }
 <p>E.2  ASYMMETRIC Archetype</p>
 <p>A provides a stream capability; B consumes it.</p>
 <pre><code>
-A -> B : OFFER { 1:1, 2:{..., 4:[{1:"core.stream.relay.1", 2:1,
-         5:{1:0, 2:3600}}], ...} }
-B -> A : OFFER { 1:1, 2:{..., 4:[{1:"core.stream.relay.1", 2:2}], ...} }
+A -> B : OFFER { 1:1, 2:{..., 4:[{1:"core.data.stream.1", 2:1,
+         5:{2:3600}}], ...} }
+B -> A : OFFER { 1:1, 2:{..., 4:[{1:"core.data.stream.1", 2:2}], ...} }
 
 A computes intersection: PROVIDE + CONSUME = match
 A evaluates trust gate for peer_B -> ALLOW
-A -> B : CONFIRM { 1:2, 2:h'...', 3:["core.stream.relay.1"] }
+A -> B : CONFIRM { 1:2, 2:h'...', 3:["core.data.stream.1"] }
 
 B computes intersection: CONSUME + PROVIDE = match
 B evaluates trust gate for peer_A -> ALLOW
-B -> A : CONFIRM { 1:2, 2:h'...', 3:["core.stream.relay.1"] }
+B -> A : CONFIRM { 1:2, 2:h'...', 3:["core.data.stream.1"] }
 
-Reconciliation: ["core.stream.relay.1"] ∩ ["core.stream.relay.1"]
+Reconciliation: ["core.data.stream.1"] ∩ ["core.data.stream.1"]
 Both peers: ACTIVE (1 capability)
 </code></pre>
 
@@ -812,20 +1189,20 @@ Both peers: ACTIVE (1 capability)
 <p>Both peers compute a match, but their trust gates produce different results.</p>
 <pre><code>
 A -> B : OFFER { ..., 4:[
-         {1:"core.stream.relay.1", 2:1},
-         {1:"core.feed.paginated.1", 2:1}], ... }
+         {1:"core.data.stream.1", 2:1},
+         {1:"core.data.blob.1", 2:1}], ... }
 B -> A : OFFER { ..., 4:[
-         {1:"core.stream.relay.1", 2:2},
-         {1:"core.feed.paginated.1", 2:2}], ... }
+         {1:"core.data.stream.1", 2:2},
+         {1:"core.data.blob.1", 2:2}], ... }
 
 A trust gates: both ALLOW
-A -> B : CONFIRM { 1:2, 2:h'...', 3:["core.feed.paginated.1",
-         "core.stream.relay.1"] }
+A -> B : CONFIRM { 1:2, 2:h'...', 3:["core.data.blob.1",
+         "core.data.stream.1"] }
 
-B trust gates: stream ALLOW, feed DENY
-B -> A : CONFIRM { 1:2, 2:h'...', 3:["core.stream.relay.1"] }
+B trust gates: stream ALLOW, blob DENY
+B -> A : CONFIRM { 1:2, 2:h'...', 3:["core.data.stream.1"] }
 
-Reconciliation: intersection = ["core.stream.relay.1"]
+Reconciliation: intersection = ["core.data.stream.1"]
 Both peers: ACTIVE (1 capability)
 </code></pre>
 
@@ -833,42 +1210,42 @@ Both peers: ACTIVE (1 capability)
 <p>Both peers provide and consume capabilities simultaneously. Scope parameters are negotiated.</p>
 <pre><code>
 A -> B : OFFER { ..., 4:[
-         {1:"core.stream.relay.1", 2:1, 5:{2:7200}},
-         {1:"core.feed.paginated.1", 2:2, 5:{1:100, 2:3600}},
-         {1:"core.heartbeat.liveness.1", 2:3, 3:true}], ... }
+         {1:"core.data.stream.1", 2:1, 5:{2:7200}},
+         {1:"core.data.blob.1", 2:2, 5:{1:100, 2:3600}},
+         {1:"core.session.heartbeat.1", 2:3, 3:true}], ... }
 
 B -> A : OFFER { ..., 4:[
-         {1:"core.stream.relay.1", 2:2, 5:{2:3600}},
-         {1:"core.feed.paginated.1", 2:1, 5:{1:50, 2:7200}},
-         {1:"core.heartbeat.liveness.1", 2:3, 3:true}], ... }
+         {1:"core.data.stream.1", 2:2, 5:{2:3600}},
+         {1:"core.data.blob.1", 2:1, 5:{1:50, 2:7200}},
+         {1:"core.session.heartbeat.1", 2:3, 3:true}], ... }
 
 A computes intersection: 3 matches
 A -> B : CONFIRM { 1:2, 2:h'...',
-         3:["core.feed.paginated.1", "core.heartbeat.liveness.1",
-            "core.stream.relay.1"],
-         4:{"core.feed.paginated.1": {1:50, 2:3600},
-            "core.stream.relay.1": {2:3600}} }
+         3:["core.data.blob.1", "core.session.heartbeat.1",
+            "core.data.stream.1"],
+         4:{"core.data.blob.1": {1:50, 2:3600},
+            "core.data.stream.1": {2:3600}} }
 
 B mirrors computation
 B -> A : CONFIRM { 1:2, 2:h'...',
-         3:["core.feed.paginated.1", "core.heartbeat.liveness.1",
-            "core.stream.relay.1"],
-         4:{"core.feed.paginated.1": {1:50, 2:3600},
-            "core.stream.relay.1": {2:3600}} }
+         3:["core.data.blob.1", "core.session.heartbeat.1",
+            "core.data.stream.1"],
+         4:{"core.data.blob.1": {1:50, 2:3600},
+            "core.data.stream.1": {2:3600}} }
 
 Reconciliation: 3-way match.
-  core.feed.paginated.1: rate_limit=min(100,50)=50, ttl=min(3600,7200)=3600
-  core.stream.relay.1:   ttl=min(7200,3600)=3600
+  core.data.blob.1:              rate_limit=min(100,50)=50, ttl=min(3600,7200)=3600
+  core.data.stream.1:            ttl=min(7200,3600)=3600
 Both peers: ACTIVE (3 capabilities, reconciled params)
 </code></pre>
 
 <p>E.5  Rebroadcast and Re-evaluation</p>
-<p>A is ACTIVE with B. A removes core.stream.relay.1 from its capability list.</p>
+<p>A is ACTIVE with B. A removes core.data.stream.1 from its capability list.</p>
 <pre><code>
 A recomputes personal_hash (hash_A2, sequence_num++)
 A -> B : OFFER { 1:1, 2:{..., 3:43, 4:[
-         {1:"core.feed.paginated.1", 2:2},
-         {1:"core.heartbeat.liveness.1", 2:3, 3:true}],
+         {1:"core.data.blob.1", 2:2},
+         {1:"core.session.heartbeat.1", 2:3, 3:true}],
          5:h'hash_A2', ...} }
 
 B observes hash_A2 != hash_A -> re-enters CAPABILITY_EXCHANGE
@@ -877,14 +1254,14 @@ Note: existing active set (3 capabilities) remains operational
 B -> A : OFFER { ..., 4:[...], ... }
 
 A -> B : CONFIRM { 1:2, 2:h'hash_A2',
-         3:["core.feed.paginated.1", "core.heartbeat.liveness.1"] }
+         3:["core.data.blob.1", "core.session.heartbeat.1"] }
 B -> A : CONFIRM { 1:2, 2:h'...',
-         3:["core.feed.paginated.1", "core.heartbeat.liveness.1"] }
+         3:["core.data.blob.1", "core.session.heartbeat.1"] }
 
 Reconciliation: 2-way match.
-core.stream.relay.1: deactivated
-core.feed.paginated.1: not interrupted
-core.heartbeat.liveness.1: not interrupted
+core.data.stream.1: deactivated
+core.data.blob.1: not interrupted
+core.session.heartbeat.1: not interrupted
 Session remains ACTIVE with 2 capabilities.
 </code></pre>
 
