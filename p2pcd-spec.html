@@ -952,21 +952,7 @@ peer-info = {
 <p>Security: A peer MUST NOT include peers in a PEX response that have not consented to peer exchange (i.e., that are not themselves advertising core.network.peerexchange.1).</p>
 <p>Negotiation: max_peers uses most-restrictive-wins. include_capabilities is provider-takes-precedence.</p>
 
-<h3>B.8  core.data.stream.1</h3>
-<table class="transition">
-<tbody>
-<tr><td><strong>Name</strong></td><td><code>core.data.stream.1</code></td></tr>
-<tr><td><strong>Role</strong></td><td>PROVIDE | CONSUME</td></tr>
-<tr><td><strong>Purpose</strong></td><td>Unidirectional continuous data stream</td></tr>
-<tr><td><strong>Params</strong></td><td><code>bitrate_kbps: uint</code>, <code>codec: tstr</code></td></tr>
-<tr><td><strong>Scope</strong></td><td><code>ttl</code> applies; <code>rate_limit</code> does not apply (continuous stream)</td></tr>
-<tr><td><strong>Transport</strong></td><td>Requires transport.udp or transport.quic</td></tr>
-<tr><td><strong>Conformance</strong></td><td>Optional</td></tr>
-</tbody>
-</table>
-<p>Negotiation: bitrate_kbps uses most-restrictive-wins (min of provider and consumer). codec uses provider-takes-precedence per §7.3 fallback for non-numeric parameters.</p>
-
-<h3>B.9  core.data.blob.1</h3>
+<h3>B.8  core.data.blob.1</h3>
 <table class="transition">
 <tbody>
 <tr><td><strong>Name</strong></td><td><code>core.data.blob.1</code></td></tr>
@@ -1005,7 +991,7 @@ blob-ack = { 1 : 21,
 <p>The offset field in blob-req enables resume after transport interruption. The provider starts sending from that offset.</p>
 <p>Negotiation: max_blob_bytes is provider-takes-precedence (the provider knows its storage). chunk_size uses most-restrictive-wins. hash_algorithm: if peers disagree, the provider&#x27;s value takes precedence per §7.3.</p>
 
-<h3>B.10  core.data.rpc.1</h3>
+<h3>B.9  core.data.rpc.1</h3>
 <table class="transition">
 <tbody>
 <tr><td><strong>Name</strong></td><td><code>core.data.rpc.1</code></td></tr>
@@ -1033,7 +1019,7 @@ rpc-resp = { 1 : 23,
 <p>Generic request/response semantics over an established P2P-CD session. The methods param in the capability declaration advertises which RPC methods the provider supports. Method semantics are defined by the application; the core capability only standardizes the envelope.</p>
 <p>Negotiation: max_request_bytes and max_response_bytes use most-restrictive-wins. methods: the activated method set is the intersection of both peers&#x27; declared methods.</p>
 
-<h3>B.11  core.data.event.1</h3>
+<h3>B.10  core.data.event.1</h3>
 <table class="transition">
 <tbody>
 <tr><td><strong>Name</strong></td><td><code>core.data.event.1</code></td></tr>
@@ -1063,6 +1049,20 @@ event-msg = { 1 : 26,
 <p>Topic filtering: topic_filters use prefix matching. Subscribing to ["chat."] receives chat.general, chat.random, etc. Subscribing to [""] (empty string prefix) receives everything. The topics param in the capability declaration advertises available topic prefixes so consumers can evaluate compatibility at OFFER time.</p>
 <p>Negotiation: max_payload_bytes uses most-restrictive-wins. topics: the activated topic set is the intersection of provider&#x27;s advertised topics and consumer&#x27;s requested filters.</p>
 
+<h3>B.11  core.data.stream.1</h3>
+<table class="transition">
+<tbody>
+<tr><td><strong>Name</strong></td><td><code>core.data.stream.1</code></td></tr>
+<tr><td><strong>Role</strong></td><td>PROVIDE | CONSUME</td></tr>
+<tr><td><strong>Purpose</strong></td><td>Unidirectional continuous data stream</td></tr>
+<tr><td><strong>Params</strong></td><td><code>bitrate_kbps: uint</code>, <code>codec: tstr</code></td></tr>
+<tr><td><strong>Scope</strong></td><td><code>ttl</code> applies; <code>rate_limit</code> does not apply (continuous stream)</td></tr>
+<tr><td><strong>Transport</strong></td><td>Requires transport.udp or transport.quic</td></tr>
+<tr><td><strong>Conformance</strong></td><td>Optional</td></tr>
+</tbody>
+</table>
+<p>Negotiation: bitrate_kbps uses most-restrictive-wins (min of provider and consumer). codec uses provider-takes-precedence per §7.3 fallback for non-numeric parameters.</p>
+
 <h3>B.12  Message Type Allocation Summary</h3>
 <table class="transition">
 <thead><tr><th>Type</th><th>Message</th><th>Capability</th><th>Status</th></tr></thead>
@@ -1084,17 +1084,23 @@ event-msg = { 1 : 26,
 <tr><td>15</td><td>CIRCUIT_CLOSE</td><td><code>core.network.relay.1</code></td><td>Normative B.6</td></tr>
 <tr><td>16</td><td>PEX_REQ</td><td><code>core.network.peerexchange.1</code></td><td>Normative B.7</td></tr>
 <tr><td>17</td><td>PEX_RESP</td><td><code>core.network.peerexchange.1</code></td><td>Normative B.7</td></tr>
-<tr><td>18</td><td>BLOB_REQ</td><td><code>core.data.blob.1</code></td><td>Normative B.9</td></tr>
-<tr><td>19</td><td>BLOB_OFFER</td><td><code>core.data.blob.1</code></td><td>Normative B.9</td></tr>
-<tr><td>20</td><td>BLOB_CHUNK</td><td><code>core.data.blob.1</code></td><td>Normative B.9</td></tr>
-<tr><td>21</td><td>BLOB_ACK</td><td><code>core.data.blob.1</code></td><td>Normative B.9</td></tr>
-<tr><td>22</td><td>RPC_REQ</td><td><code>core.data.rpc.1</code></td><td>Normative B.10</td></tr>
-<tr><td>23</td><td>RPC_RESP</td><td><code>core.data.rpc.1</code></td><td>Normative B.10</td></tr>
-<tr><td>24</td><td>EVENT_SUB</td><td><code>core.data.event.1</code></td><td>Normative B.11</td></tr>
-<tr><td>25</td><td>EVENT_UNSUB</td><td><code>core.data.event.1</code></td><td>Normative B.11</td></tr>
-<tr><td>26</td><td>EVENT_MSG</td><td><code>core.data.event.1</code></td><td>Normative B.11</td></tr>
-<tr><td>27–31</td><td>(reserved)</td><td>—</td><td>Reserved for v2 core extensions</td></tr>
-<tr><td>32+</td><td>(application)</td><td>(application-defined)</td><td>Open</td></tr>
+<tr><td>18</td><td>BLOB_REQ</td><td><code>core.data.blob.1</code></td><td>Normative B.8</td></tr>
+<tr><td>19</td><td>BLOB_OFFER</td><td><code>core.data.blob.1</code></td><td>Normative B.8</td></tr>
+<tr><td>20</td><td>BLOB_CHUNK</td><td><code>core.data.blob.1</code></td><td>Normative B.8</td></tr>
+<tr><td>21</td><td>BLOB_ACK</td><td><code>core.data.blob.1</code></td><td>Normative B.8</td></tr>
+<tr><td>22</td><td>RPC_REQ</td><td><code>core.data.rpc.1</code></td><td>Normative B.9</td></tr>
+<tr><td>23</td><td>RPC_RESP</td><td><code>core.data.rpc.1</code></td><td>Normative B.9</td></tr>
+<tr><td>24</td><td>EVENT_SUB</td><td><code>core.data.event.1</code></td><td>Normative B.10</td></tr>
+<tr><td>25</td><td>EVENT_UNSUB</td><td><code>core.data.event.1</code></td><td>Normative B.10</td></tr>
+<tr><td>26</td><td>EVENT_MSG</td><td><code>core.data.event.1</code></td><td>Normative B.10</td></tr>
+
+<tr><td>27</td><td>STREAM_OPEN</td><td><code>core.data.stream.1</code></td><td>Normative B.11</td></tr>
+<tr><td>28</td><td>STREAM_DATA</td><td><code>core.data.stream.1</code></td><td>Normative B.11</td></tr>
+<tr><td>29</td><td>STREAM_CLOSE</td><td><code>core.data.stream.1</code></td><td>Normative B.11</td></tr>
+<tr><td>30</td><td>STREAM_CONTROL</td><td><code>core.data.stream.1</code></td><td>Normative B.11</td></tr>
+
+<tr><td>31-35</td><td>(reserved)</td><td>—</td><td>Reserved for v2 core extensions</td></tr>
+<tr><td>36+</td><td>(application)</td><td>(application-defined)</td><td>Open</td></tr>
 </tbody>
 </table>
 <br>
